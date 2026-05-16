@@ -3,6 +3,7 @@
 > ターミナルに住んでいる AI の同僚。あなたがタスクを伝え、質問に答えると、あとは自分で作業します。
 
 [中文](README.md) | [English](README.en.md)
+[![996.icu](https://img.shields.io/badge/link-996.icu-%23FF4D5B.svg?style=flat-square)](https://996.icu/#/zh_CN)
 
 ## 概要
 
