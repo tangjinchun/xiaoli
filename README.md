@@ -1,15 +1,15 @@
 # xiaoli（小李）
 
-> 一个住在终端里的 AI 同事。你交代任务、回答追问，它自己干活。
+> 一个住在终端里的 AI Agent。你交代任务、回答追问，它自己干活。
 
 [English](README.en.md) | [日本語](README.ja.md)
 [![996.icu](https://img.shields.io/badge/link-996.icu-%23FF4D5B.svg?style=flat-square)](https://996.icu/#/zh_CN)
 
 ## 项目简介
 
-xiaoli（小李）是一个 npm 全局安装的终端 AI 同事。与传统 AI 助手不同，xiaoli **先问完、后执行**——不回答完所有问题，它不动一行代码。
+xiaoli（小李）是一个 npm 全局安装的终端 AI Agent。与传统 AI 助手不同，xiaoli **先问完、后执行**——不回答完所有问题，它不动一行代码。
 
-**核心定位：不是「时间管理」工具，是「时间扩展」工具。不是助手，是同事。**
+**核心定位：不是「时间管理」工具，是「时间扩展」工具。不是助手，是 AI Agent。**
 
 ## 主要功能
 
@@ -68,17 +68,6 @@ xiaoli continue
 - [技术架构设计](docs/02_技术架构设计.md)
 - [竞品分析](docs/04_竞品分析.md)
 - [追问与执行计划设计](docs/05_追问与执行计划设计.md)
-
-## 开发
-
-本项目采用三 Agent 协作开发模式，详见 [多 Agent 协作开发方案](docs/08_多Agent协作开发方案.md)。
-
-```bash
-# 以不同 Agent 身份启动
-source scripts/agent-zhangsan.sh        # 用户交互层
-source scripts/agent-lisi.sh            # 核心引擎层
-source scripts/agent-zhangchonglian.sh  # 基础设施
-```
 
 ## 许可证
 
