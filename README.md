@@ -3,6 +3,7 @@
 > 一个住在终端里的 AI 同事。你交代任务、回答追问，它自己干活。
 
 [English](README.en.md) | [日本語](README.ja.md)
+[![996.icu](https://img.shields.io/badge/link-996.icu-%23FF4D5B.svg?style=flat-square)](https://996.icu/#/zh_CN)
 
 ## 项目简介
 

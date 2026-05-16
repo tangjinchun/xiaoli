@@ -3,6 +3,7 @@
 > An AI colleague living in your terminal. You assign tasks, answer follow-up questions, and it gets the work done.
 
 [中文](README.md) | [日本語](README.ja.md)
+[![996.icu](https://img.shields.io/badge/link-996.icu-%23FF4D5B.svg?style=flat-square)](https://996.icu/#/en_US)
 
 ## Overview
 
