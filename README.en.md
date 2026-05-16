@@ -4,6 +4,8 @@
 
 [中文](README.md) | [日本語](README.ja.md)
 
+[![996.icu](https://img.shields.io/badge/link-996.icu-%23FF4D5B.svg?style=flat-square)](https://996.icu/#/en_US)
+
 ## Overview
 
 xiaoli is an npm global CLI tool that acts as your AI colleague in the terminal. Unlike traditional AI assistants, xiaoli **asks all questions first, then executes** — it won't touch a single line of code until all ambiguities are resolved.

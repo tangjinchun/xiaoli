@@ -4,6 +4,8 @@
 
 [English](README.en.md) | [日本語](README.ja.md)
 
+[![996.icu](https://img.shields.io/badge/link-996.icu-%23FF4D5B.svg?style=flat-square)](https://996.icu/#/zh_CN)
+
 ## 项目简介
 
 xiaoli（小李）是一个 npm 全局安装的终端 AI 同事。与传统 AI 助手不同，xiaoli **先问完、后执行**——不回答完所有问题，它不动一行代码。

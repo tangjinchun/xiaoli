@@ -4,6 +4,8 @@
 
 [中文](README.md) | [English](README.en.md)
 
+[![996.icu](https://img.shields.io/badge/link-996.icu-%23FF4D5B.svg?style=flat-square)](https://996.icu/#/zh_CN)
+
 ## 概要
 
 xiaoli は npm でグローバルインストールする CLI ツールで、ターミナル内の AI 同僚として動作します。従来の AI アシスタントと異なり、xiaoli は**すべての質問を先に行い、その後に実行**します。曖昧さが解消されるまでコードに一切手を付けません。
