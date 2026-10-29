@@ -1,43 +1,39 @@
 /**
- * 追问生成器 (L2)
+ * 追问生成器 (L2)。
  *
- * 基于用户任务 + L1 上下文，调用 AI 生成 6 大维度的追问。
- * 对应 05 文档 §2「追问生成 Prompt」。
+ * 基于用户任务 + L1 上下文，调用 AI 生成追问。
+ * 输出通过 chatJson 强制为 { questions: [...] }。
  */
 
-import { chat } from "../ai/client.js";
+import { chatJson } from '../ai/client.js';
 import {
   buildQuestionGenSystemPrompt,
   parseQuestionGenResponse,
-} from "../ai/prompts/question-gen.js";
-import type { QuestionSkeleton } from "./types.js";
+} from '../ai/prompts/question-gen.js';
+import type { QuestionSkeleton } from './types.js';
+import { TaskPausedError } from './errors.js';
 
-/**
- * 生成追问列表
- *
- * @param taskDescription - 用户任务描述
- * @param projectContext - 可选：L1 上下文（用于精准追问）
- * @returns 追问列表（最多 8 个）
- */
+export interface QuestionGenerationOptions {
+  signal?: AbortSignal;
+}
+
 export async function generateQuestions(
   taskDescription: string,
-  projectContext?: string
+  projectContext?: string,
+  options: QuestionGenerationOptions = {},
 ): Promise<QuestionSkeleton[]> {
-  const systemPrompt = buildQuestionGenSystemPrompt(projectContext);
-
   try {
-    const result = await chat({
-      systemPrompt,
+    const { data } = await chatJson<{ questions?: QuestionSkeleton[] } | QuestionSkeleton[]>({
+      systemPrompt: buildQuestionGenSystemPrompt(projectContext),
       userMessage: taskDescription,
-      temperature: 0.3,
+      temperature: 0.2,
       maxTokens: 2048,
-      responseFormat: "json_object",
+      signal: options.signal,
     });
 
-    return parseQuestionGenResponse(result.content);
+    return parseQuestionGenResponse(JSON.stringify(data));
   } catch (err) {
-    throw new Error(
-      `追问生成失败: ${err instanceof Error ? err.message : err}`
-    );
+    if (err instanceof TaskPausedError) throw err;
+    throw new Error(`追问生成失败: ${err instanceof Error ? err.message : String(err)}`);
   }
 }

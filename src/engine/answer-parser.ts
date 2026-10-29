@@ -47,26 +47,21 @@ export function parseAnswers(
 // ───── 序号解析 ─────
 
 function parseNumbered(raw: string, questions: QuestionSkeleton[]): ParseResult {
-  // 匹配 "1. xxx" / "1) xxx" / "1、xxx" / "【1】xxx"
-  const lines = raw.split(/\n/);
-  const entries: { num: number; text: string }[] = [];
-  let currentNum: number | null = null;
-  let currentText = "";
-
-  for (const line of lines) {
-    const match = line.match(/^\s*(\d+)\s*[.、)】]\s*(.*)$/);
-    if (match) {
-      if (currentNum !== null) {
-        entries.push({ num: currentNum, text: currentText.trim() });
-      }
-      currentNum = parseInt(match[1], 10);
-      currentText = match[2];
-    } else if (currentNum !== null) {
-      currentText += "\n" + line;
-    }
+  // 支持一行多个序号："1. 甲 2. 乙"，也支持多行。
+  // 要求序号后至少有一个空格，避免把 "MySQL 8.0" 里的 8. 误判成序号。
+  let matches = Array.from(raw.matchAll(/(?:^|\s)(\d+)\s*[.、)】]\s+/g));
+  if (matches.length === 0) {
+    // 中文/括号分隔符后面可以没有空格："1、答案" / "1)答案" / "1】答案"
+    matches = Array.from(raw.matchAll(/(?:^|\s)(\d+)\s*[、)】]\s*/g));
   }
-  if (currentNum !== null) {
-    entries.push({ num: currentNum, text: currentText.trim() });
+  const entries: { num: number; text: string }[] = [];
+
+  for (let i = 0; i < matches.length; i++) {
+    const match = matches[i];
+    const start = (match.index ?? 0) + match[0].length;
+    const end = i + 1 < matches.length ? matches[i + 1].index ?? raw.length : raw.length;
+    const text = raw.slice(start, end).trim();
+    entries.push({ num: parseInt(match[1], 10), text });
   }
 
   if (entries.length === 0) {
@@ -115,6 +110,23 @@ function parseFreeText(raw: string, questions: QuestionSkeleton[]): ParseResult 
     .map((s) => s.trim())
     .filter(Boolean);
 
+  // 只有一个问题时，用户往往直接说答案，不必强求关键词命中。
+  if (questions.length === 1) {
+    return {
+      answers: [
+        {
+          questionIndex: 0,
+          questionId: questions[0].id,
+          answer: raw.trim(),
+          confidence: 0.6,
+        },
+      ],
+      unmatched: [],
+      coveragePercent: 100,
+      highConfidenceCount: 0,
+    };
+  }
+
   for (const sentence of sentences) {
     let bestMatch: { index: number; score: number } | null = null;
 
@@ -128,7 +140,7 @@ function parseFreeText(raw: string, questions: QuestionSkeleton[]): ParseResult 
       }
     }
 
-    if (bestMatch && bestMatch.score >= 0.3) {
+    if (bestMatch && bestMatch.score >= 0.2) {
       // 将低分匹配也收进来，但标注低置信
       const confidence = Math.min(1.0, bestMatch.score * 1.5);
       answers.push({
@@ -156,7 +168,7 @@ function parseFreeText(raw: string, questions: QuestionSkeleton[]): ParseResult 
 function keywordScore(sentence: string, question: QuestionSkeleton): number {
   // 从问题文本中提取关键词
   const keywords = extractKeywords(question.question);
-  if (keywords.length === 0) return 0.2; // 无关键词时给低分
+  if (keywords.length === 0) return 0.1; // 无关键词时几乎不匹配
 
   const sentenceLower = sentence.toLowerCase();
   let hits = 0;
@@ -171,9 +183,18 @@ function keywordScore(sentence: string, question: QuestionSkeleton): number {
 }
 
 function extractKeywords(text: string): string[] {
-  // 提取有意义的词（长度≥2 的连续中文字符，或长度≥3 的英文单词）
+  // 中文没有空格，用 2-gram 近似分词；英文取长度 >= 3 的词。
   const chinese = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
   const english = text.match(/[a-zA-Z]{3,}/g) || [];
+  const words: string[] = [];
+
+  for (const run of chinese) {
+    if (run.length <= 4) words.push(run);
+    for (let i = 0; i <= run.length - 2; i++) {
+      words.push(run.slice(i, i + 2));
+    }
+  }
+  words.push(...english);
 
   // 过滤掉泛词
   const stopWords = new Set([
@@ -181,7 +202,7 @@ function extractKeywords(text: string): string[] {
     "可以", "需要", "可能", "应该", "这个", "那个", "如何",
   ]);
 
-  return [...chinese, ...english].filter((w) => !stopWords.has(w));
+  return [...new Set(words)].filter((w) => !stopWords.has(w));
 }
 
 // ───── 格式化输出 ─────

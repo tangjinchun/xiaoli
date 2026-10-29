@@ -1,9 +1,15 @@
 /**
- * 模型分流
+ * 模型分流。
  *
- * 策略：
- *   v4-pro: 提问生成、计划生成、代码分析、错误诊断（高推理任务）
- *   v4-flash: 简单文件操作决策、Git commit message、步骤摘要（低延迟任务）
+ * reasoning：追问生成、计划生成、代码分析、错误诊断（高推理任务）
+ * fast：追问收束、摘要、简单分类（低延迟任务）
  */
 
-// TODO: 实现模型分流逻辑
+import { loadConfig } from '../storage/config.js';
+
+export type ModelKind = 'reasoning' | 'fast';
+
+export function modelFor(kind: ModelKind = 'reasoning'): string {
+  const config = loadConfig();
+  return kind === 'fast' ? config.api.modelFlash : config.api.modelPro;
+}

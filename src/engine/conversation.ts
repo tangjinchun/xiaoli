@@ -1,16 +1,39 @@
 /**
- * 对话引擎
+ * 任务状态机。
  *
- * 状态机：
- *   IDLE → QUESTIONING → WAITING_ANSWER → ... → PLAN_READY
- *        → WAITING_CONFIRM → EXECUTING → COMPLETED / STUCK
- *
- * 职责：
- *   1. 接收用户任务描述
- *   2. 调用 AI 生成提问列表
- *   3. 逐个展示问题，收集用户回答
- *   4. 全部回答后 → 调用 AI 生成执行计划
- *   5. 用户确认 → 将计划转为步骤列表 → 交给执行器
+ * 只允许明确的状态迁移，避免出现“已完成的任务又被执行”这类问题。
  */
 
-// TODO: 实现对话状态机
+import type { TaskStatus } from './types.js';
+
+const TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
+  questioning: ['planning', 'paused', 'failed', 'rejected'],
+  planning: ['plan_ready', 'paused', 'failed'],
+  plan_ready: ['executing', 'planning', 'paused', 'rejected'],
+  executing: ['completed', 'failed', 'paused'],
+  paused: ['questioning', 'planning', 'plan_ready', 'executing', 'failed', 'rejected'],
+  failed: ['planning', 'plan_ready', 'executing', 'paused', 'rejected'],
+  completed: [],
+  rejected: [],
+};
+
+export function canTransition(from: TaskStatus, to: TaskStatus): boolean {
+  if (from === to) return true;
+  return TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+export function assertTransition(from: TaskStatus, to: TaskStatus): void {
+  if (!canTransition(from, to)) {
+    throw new Error(`非法任务状态迁移: ${from} -> ${to}`);
+  }
+}
+
+export function nextStatus(
+  current: TaskStatus,
+  candidates: TaskStatus[],
+): TaskStatus | null {
+  for (const candidate of candidates) {
+    if (canTransition(current, candidate)) return candidate;
+  }
+  return null;
+}

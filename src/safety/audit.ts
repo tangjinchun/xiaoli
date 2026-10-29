@@ -1,56 +1,65 @@
 /**
- * 操作审计
+ * 操作审计。
  *
- * 所有 Shell/SQL/File/Git/Env 操作写入 ~/.xiaoli/audit.log。
- * 不依赖数据库（避免循环依赖），纯文件追加。
+ * 所有 Shell/SQL/File/Git/Env 操作写入审计日志（默认 ~/.xiaoli/audit.log）。
+ * 日志中的 API key、token、password 会被脱敏。
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-
-// ============================================================================
-// 存储路径
-// ============================================================================
-
-const AUDIT_DIR = path.join(os.homedir(), '.xiaoli');
-const AUDIT_FILE = path.join(AUDIT_DIR, 'audit.log');
-
-function ensureDir(): void {
-  if (!fs.existsSync(AUDIT_DIR)) {
-    fs.mkdirSync(AUDIT_DIR, { recursive: true });
-  }
-}
-
-// ============================================================================
-// 日志条目
-// ============================================================================
+import { getAuditPath, ensureXiaoliHome } from '../storage/paths.js';
+import { loadConfig } from '../storage/config.js';
 
 export interface AuditEntry {
   timestamp: string;
   taskId?: string;
   stepId?: string;
-  type: 'shell' | 'sql' | 'git' | 'file' | 'env';
+  type: 'shell' | 'sql' | 'git' | 'file' | 'env' | 'policy' | 'task';
   command: string;
   verdict: string;
   exitCode?: number;
   durationMs?: number;
   error?: string;
+  confirmed?: boolean;
 }
 
-// ============================================================================
-// 写入
-// ============================================================================
+function expandHome(p: string): string {
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/') || p.startsWith('~\\')) {
+    return path.join(os.homedir(), p.slice(2));
+  }
+  return p;
+}
+
+function auditFilePath(): string {
+  const configured = loadConfig().safety.auditLogPath;
+  return configured ? expandHome(configured) : getAuditPath();
+}
+
+export function redact(text: string): string {
+  return text
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, 'sk-****')
+    .replace(/((?:api[_-]?key|token|password|passwd|secret)\s*[:=]\s*)["']?[^\s"',;]+/gi, '$1****')
+    .replace(/(authorization:\s*bearer\s+)[^\s"',;]+/gi, '$1****');
+}
 
 export function log(entry: AuditEntry): void {
-  ensureDir();
-  const line = JSON.stringify(entry) + '\n';
-  fs.appendFileSync(AUDIT_FILE, line, 'utf-8');
+  try {
+    ensureXiaoliHome();
+    const target = auditFilePath();
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const safe: AuditEntry = {
+      ...entry,
+      command: redact(entry.command),
+      error: entry.error ? redact(entry.error) : undefined,
+    };
+    fs.appendFileSync(target, JSON.stringify(safe) + '\n', 'utf-8');
+  } catch {
+    // 审计失败不能阻塞主流程；但会静默丢失记录。
+  }
 }
 
-/**
- * 记录一次成功执行
- */
 export function logSuccess(
   taskId: string | undefined,
   stepId: string | undefined,
@@ -70,9 +79,6 @@ export function logSuccess(
   });
 }
 
-/**
- * 记录一次被拦截的操作
- */
 export function logBlocked(
   taskId: string | undefined,
   stepId: string | undefined,
@@ -90,9 +96,6 @@ export function logBlocked(
   });
 }
 
-/**
- * 记录一次失败执行
- */
 export function logFailure(
   taskId: string | undefined,
   stepId: string | undefined,
@@ -107,22 +110,59 @@ export function logFailure(
     stepId,
     type,
     command,
-    verdict: 'ALLOW',
+    verdict: 'ERROR',
     exitCode,
     error,
   });
 }
 
-// ============================================================================
-// 读取最近的审计记录
-// ============================================================================
+export function logPolicy(
+  taskId: string | undefined,
+  stepId: string | undefined,
+  type: AuditEntry['type'],
+  command: string,
+  verdict: string,
+  reason: string,
+): void {
+  log({
+    timestamp: new Date().toISOString(),
+    taskId,
+    stepId,
+    type,
+    command,
+    verdict,
+    error: reason,
+  });
+}
+
+export function logConfirmation(
+  taskId: string | undefined,
+  stepId: string | undefined,
+  command: string,
+  confirmed: boolean,
+): void {
+  log({
+    timestamp: new Date().toISOString(),
+    taskId,
+    stepId,
+    type: 'policy',
+    command,
+    verdict: confirmed ? 'CONFIRMED' : 'DECLINED',
+    confirmed,
+  });
+}
 
 export function readRecent(limit = 20): AuditEntry[] {
-  ensureDir();
-  if (!fs.existsSync(AUDIT_FILE)) return [];
-
-  const content = fs.readFileSync(AUDIT_FILE, 'utf-8');
-  const lines = content.trim().split('\n').filter(Boolean);
-  const entries = lines.slice(-limit).map(line => JSON.parse(line) as AuditEntry);
-  return entries.reverse();
+  try {
+    const target = auditFilePath();
+    if (!fs.existsSync(target)) return [];
+    const content = fs.readFileSync(target, 'utf-8');
+    const lines = content.trim().split('\n').filter(Boolean);
+    return lines
+      .slice(-limit)
+      .map((line) => JSON.parse(line) as AuditEntry)
+      .reverse();
+  } catch {
+    return [];
+  }
 }

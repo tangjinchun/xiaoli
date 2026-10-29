@@ -1,12 +1,16 @@
 /**
- * Prompt 模板管理
+ * Prompt 模板统一出口。
  *
- * 系统级 Prompt：
- *   1. 任务解析 → 提问生成
- *   2. 计划生成
- *   3. 错误诊断
- *
- * 所有 Prompt 用中文编写，xiaoli 的非拟人化简洁风格。
+ * 具体模板放在 src/ai/prompts/ 下，业务代码从这里导入。
  */
 
-// TODO: 实现 Prompt 模板
+export {
+  buildQuestionGenSystemPrompt,
+  parseQuestionGenResponse,
+} from './prompts/question-gen.js';
+export { buildPlanPrompt } from './prompts/plan-gen.js';
+export {
+  REFINEMENT_SYSTEM_PROMPT,
+  buildRefinementContext,
+  buildRefinementPrompt,
+} from './prompts/refinement.js';

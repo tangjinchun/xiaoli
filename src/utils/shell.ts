@@ -1,31 +1,29 @@
 /**
- * Shell 执行封装
+ * Shell 执行封装。
  *
- * 职责：
- *   · 安全执行 Shell 命令（扫描 → 执行 → 审计）
- *   · 捕获 stdout / stderr / exitCode
- *   · 超时控制
- *   · 后台执行 + notify
+ * 同步 shell() 供内部短命令使用；异步 runCommand() 供执行器使用，
+ * 支持超时、AbortSignal（Ctrl+C 暂停）和统一安全策略。
  */
 
-import { execSync, exec, spawn } from 'node:child_process';
-import { scanShell } from '../safety/scanner';
-import { logSuccess, logFailure, logBlocked } from '../safety/audit';
-
-// ============================================================================
-// 类型
-// ============================================================================
+import { exec, execSync, spawn } from 'node:child_process';
+import { evaluateShell } from '../safety/policy.js';
+import { logSuccess, logFailure, logBlocked, logConfirmation } from '../safety/audit.js';
+import {
+  ConfirmationRequiredError,
+  PolicyDeniedError,
+  TaskPausedError,
+} from '../engine/errors.js';
 
 export interface ShellOptions {
-  /** 工作目录 */
   cwd?: string;
-  /** 超时（ms），默认 30_000 */
   timeout?: number;
-  /** 环境变量覆盖 */
   env?: Record<string, string>;
-  /** 任务追踪 */
   taskId?: string;
   stepId?: string;
+  /** 已经过用户确认（用于 ASK 级命令） */
+  confirmed?: boolean;
+  /** Ctrl+C / 暂停信号 */
+  signal?: AbortSignal;
 }
 
 export interface ShellResult {
@@ -43,37 +41,45 @@ export interface BackgroundProcess {
   command: string;
 }
 
+const DEFAULT_TIMEOUT = 30_000;
+const MAX_BUFFER = 10 * 1024 * 1024;
+
+function policyCheck(command: string, opts: ShellOptions): void {
+  const policy = evaluateShell(command, opts.cwd ?? process.cwd());
+  if (policy.verdict === 'STOP') {
+    logBlocked(opts.taskId, opts.stepId, 'shell', command, 'STOP');
+    throw new PolicyDeniedError(`命令被安全策略拒绝: ${command}`, policy.reason);
+  }
+  if (policy.verdict === 'ASK' && !opts.confirmed) {
+    throw new ConfirmationRequiredError(policy.reason, `命令需要确认: ${command}`);
+  }
+  if (policy.verdict === 'ASK' && opts.confirmed) {
+    logConfirmation(opts.taskId, opts.stepId, command, true);
+  }
+}
+
 // ============================================================================
-// 同步执行（推荐：简单命令）
+// 同步执行（内部短命令）
 // ============================================================================
 
 export function shell(command: string, opts: ShellOptions = {}): ShellResult {
-  const { cwd, timeout = 30_000, taskId, stepId } = opts;
+  policyCheck(command, opts);
 
-  // 1. 安全扫描
-  const scanResult = scanShell(command, cwd);
-  if (scanResult.verdict === 'STOP') {
-    logBlocked(taskId, stepId, 'shell', command, 'STOP');
-    throw new Error(`命令被拦截: ${scanResult.reason}`);
-  }
-  if (scanResult.verdict === 'ASK') {
-    // 需要用户确认——这里抛出明确标记，由 executor 处理
-    throw new ShellConfirmationRequired(command, scanResult.reason);
-  }
-
-  // 2. 执行
+  const timeout = opts.timeout ?? DEFAULT_TIMEOUT;
   const start = Date.now();
+
   try {
     const stdout = execSync(command, {
-      cwd,
+      cwd: opts.cwd,
       timeout,
       env: { ...process.env, ...opts.env },
       encoding: 'utf-8',
-      maxBuffer: 10 * 1024 * 1024, // 10MB
+      maxBuffer: MAX_BUFFER,
+      windowsHide: true,
     });
 
     const durationMs = Date.now() - start;
-    logSuccess(taskId, stepId, 'shell', command, durationMs);
+    logSuccess(opts.taskId, opts.stepId, 'shell', command, durationMs);
 
     return {
       command,
@@ -83,27 +89,36 @@ export function shell(command: string, opts: ShellOptions = {}): ShellResult {
       durationMs,
       timedOut: false,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     const durationMs = Date.now() - start;
+    const e = err as {
+      killed?: boolean;
+      signal?: string;
+      code?: string | number;
+      status?: number;
+      stdout?: string;
+      stderr?: string;
+      message?: string;
+    };
 
-    if (err.killed || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
-      logFailure(taskId, stepId, 'shell', command, -1, 'TIMEOUT');
+    if (e.killed || e.signal === 'SIGTERM' || e.code === 'ETIMEDOUT') {
+      logFailure(opts.taskId, opts.stepId, 'shell', command, -1, 'TIMEOUT');
       return {
         command,
-        stdout: err.stdout?.trim() ?? '',
-        stderr: err.stderr?.trim() ?? '',
+        stdout: e.stdout?.trim() ?? '',
+        stderr: e.stderr?.trim() ?? '',
         exitCode: -1,
         durationMs,
         timedOut: true,
       };
     }
 
-    logFailure(taskId, stepId, 'shell', command, err.status ?? -1, err.message);
+    logFailure(opts.taskId, opts.stepId, 'shell', command, e.status ?? -1, e.message ?? '');
     return {
       command,
-      stdout: err.stdout?.trim() ?? '',
-      stderr: err.stderr?.trim() ?? '',
-      exitCode: err.status ?? -1,
+      stdout: e.stdout?.trim() ?? '',
+      stderr: e.stderr?.trim() ?? '',
+      exitCode: e.status ?? -1,
       durationMs,
       timedOut: false,
     };
@@ -111,20 +126,116 @@ export function shell(command: string, opts: ShellOptions = {}): ShellResult {
 }
 
 // ============================================================================
-// 后台执行（长时间任务）
+// 异步执行（执行器）
 // ============================================================================
 
-export function shellBackground(
-  command: string,
-  opts: ShellOptions = {},
-): BackgroundProcess {
-  const { cwd } = opts;
+export function runCommand(command: string, opts: ShellOptions = {}): Promise<ShellResult> {
+  policyCheck(command, opts);
 
-  const child = spawn('sh', ['-c', command], {
-    cwd,
+  const timeout = opts.timeout ?? DEFAULT_TIMEOUT;
+  const start = Date.now();
+
+  if (opts.signal?.aborted) {
+    return Promise.reject(new TaskPausedError());
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = exec(
+      command,
+      {
+        cwd: opts.cwd,
+        timeout,
+        env: { ...process.env, ...opts.env },
+        encoding: 'utf-8',
+        maxBuffer: MAX_BUFFER,
+        windowsHide: true,
+        signal: opts.signal,
+      },
+      (err, stdout, stderr) => {
+        const durationMs = Date.now() - start;
+        const out = String(stdout ?? '').trim();
+        const errOut = String(stderr ?? '').trim();
+
+        if (err) {
+          const e = err as NodeJS.ErrnoException & {
+            killed?: boolean;
+            signal?: string;
+            code?: string | number;
+            status?: number;
+          };
+
+          if (e.name === 'AbortError' || e.code === 'ABORT_ERR') {
+            reject(new TaskPausedError());
+            return;
+          }
+
+          if (e.killed || e.signal === 'SIGTERM' || e.code === 'ETIMEDOUT') {
+            logFailure(opts.taskId, opts.stepId, 'shell', command, -1, 'TIMEOUT');
+            resolve({
+              command,
+              stdout: out,
+              stderr: errOut,
+              exitCode: -1,
+              durationMs,
+              timedOut: true,
+            });
+            return;
+          }
+
+          const exitCode = typeof e.status === 'number' ? e.status : typeof e.code === 'number' ? e.code : -1;
+          logFailure(opts.taskId, opts.stepId, 'shell', command, exitCode, e.message);
+          resolve({
+            command,
+            stdout: out,
+            stderr: errOut,
+            exitCode,
+            durationMs,
+            timedOut: false,
+          });
+          return;
+        }
+
+        logSuccess(opts.taskId, opts.stepId, 'shell', command, durationMs);
+        resolve({
+          command,
+          stdout: out,
+          stderr: errOut,
+          exitCode: 0,
+          durationMs,
+          timedOut: false,
+        });
+      },
+    );
+
+    // 防御：有些 Windows 环境不会触发 AbortError，直接监听 signal。
+    if (opts.signal) {
+      const onAbort = (): void => {
+        try {
+          child.kill();
+        } catch {
+          // ignore
+        }
+      };
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
+// ============================================================================
+// 后台执行
+// ============================================================================
+
+export function shellBackground(command: string, opts: ShellOptions = {}): BackgroundProcess {
+  policyCheck(command, opts);
+
+  const child = spawn(command, {
+    cwd: opts.cwd,
     env: { ...process.env, ...opts.env },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
+    shell: true,
+    windowsHide: true,
   });
 
   child.unref();
@@ -140,32 +251,22 @@ export function shellBackground(
 // 便捷函数
 // ============================================================================
 
-/**
- * 执行并只返回 stdout（忽略 stderr）
- */
 export function shellStdout(command: string, opts?: ShellOptions): string {
   return shell(command, opts).stdout;
 }
 
-/**
- * 执行并检查 exitCode=0，否则抛异常
- */
 export function shellOrThrow(command: string, opts?: ShellOptions): ShellResult {
   const result = shell(command, opts);
   if (result.exitCode !== 0) {
-    throw new Error(
-      `命令失败 (exit=${result.exitCode}): ${command}\n${result.stderr}`,
-    );
+    throw new Error(`命令失败 (exit=${result.exitCode}): ${command}\n${result.stderr}`);
   }
   return result;
 }
 
-/**
- * 检查某个命令是否存在
- */
 export function commandExists(cmd: string): boolean {
   try {
-    shell(`which ${cmd}`, { timeout: 3_000 });
+    const probe = process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`;
+    shell(probe, { timeout: 3_000 });
     return true;
   } catch {
     return false;
@@ -173,15 +274,15 @@ export function commandExists(cmd: string): boolean {
 }
 
 // ============================================================================
-// 自定义异常
+// 兼容旧异常名
 // ============================================================================
 
-export class ShellConfirmationRequired extends Error {
+export class ShellConfirmationRequired extends ConfirmationRequiredError {
   constructor(
     public readonly command: string,
     public readonly reason: string,
   ) {
-    super(`需要用户确认: ${command} — ${reason}`);
+    super(reason, `需要用户确认: ${command} — ${reason}`);
     this.name = 'ShellConfirmationRequired';
   }
 }
